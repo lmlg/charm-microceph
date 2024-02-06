@@ -71,7 +71,7 @@ class TestCharm(test_utils.CharmTestCase):
         action_event.set_results.assert_called()
         action_event.fail.assert_not_called()
         subprocess.run.assert_called_with(
-            ["sudo", "microceph", "disk", "add", "/dev/sdb"],
+            ["microceph", "disk", "add", "/dev/sdb"],
             capture_output=True,
             text=True,
             check=True,
@@ -91,7 +91,7 @@ class TestCharm(test_utils.CharmTestCase):
         action_event.set_results.assert_called()
         action_event.fail.assert_not_called()
         subprocess.run.assert_called_with(
-            ["sudo", "microceph", "disk", "add", "loop,4G,3"],
+            ["microceph", "disk", "add", "loop,4G,3"],
             capture_output=True,
             text=True,
             check=True,

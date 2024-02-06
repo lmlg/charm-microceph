@@ -73,6 +73,13 @@ class MicroClusterPeers(OperatorPeers):
             unit=relation_event.unit,
         )
 
+    def _departing_event_args(self, relation_event):
+        return dict(
+            relation=relation_event.relation,
+            app=relation_event.app,
+            unit=relation_event.departing_unit,
+        )
+
     def on_created(self, event: EventBase) -> None:
         """Handle relation created event."""
         # Do nothing or raise an event to charm?
@@ -126,7 +133,7 @@ class MicroClusterPeers(OperatorPeers):
 
         # TOCHK: Can we remove node which is not joined?
         logger.debug("Emitting remove_unit event")
-        self.on.remove_node.emit(**self._event_args(event))
+        self.on.remove_node.emit(**self._departing_event_args(event))
 
 
 class MicroClusterPeerHandler(BasePeerHandler):

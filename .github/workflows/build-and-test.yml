@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Install dependencies
         run: python3 -m pip install tox
       - name: Run linters
@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: Install dependencies
         run: python -m pip install tox
       - name: Run tests
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
       - name: Setup LXD
@@ -67,7 +67,7 @@ jobs:
           path: ~/artifacts/
 
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -112,3 +112,76 @@ jobs:
           ~/actionutils.sh wait_for_osds 3
           sudo microceph.ceph -s
 
+  juju-test:
+    needs:
+      - lint
+      - unit-test
+      - build
+    name: Juju test
+    runs-on: [self-hosted, xlarge]
+    steps:
+
+      - name: Download charm
+        uses: actions/download-artifact@v3
+        with:
+          name: charms
+          path: ~/artifacts/
+
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup LXD
+        uses: canonical/setup-lxd@v0.1.1
+
+      - name: Install dependencies
+        run: |
+          date
+          sudo snap install juju
+          mkdir -p ~/.local/share/juju
+          juju bootstrap localhost
+          juju add-model microceph-test
+          date
+
+      - name: Install MicroCeph charm
+        run: |
+          date
+          juju deploy -n 3 ~/artifacts/microceph.charm
+          juju wait-for application microceph --query='name=="microceph" && (status=="active" || status=="idle")'
+          date
+
+      - name: Show Juju status
+        run: |
+          set -eux
+          juju status
+
+      - name: Add disks
+        run: |
+          set -eux
+          juju run microceph/0 add-osd loop-spec=4G,1 --wait=2m
+          juju run microceph/1 add-osd loop-spec=4G,1 --wait=2m
+          juju run microceph/2 add-osd loop-spec=4G,1 --wait=2m
+
+      - name: Remove Unit
+        run: |
+          set -x
+          juju remove-unit microceph/2 --no-prompt
+          # wait and check if the unit is still present.
+          for i in $(seq 1 8); do
+            res=$( ( juju status | grep -cF "microceph/2" ) || true )
+            if [[ $res -gt 0 ]] ; then
+              echo -n '.'
+              sleep 5
+            else
+              echo "Unit removed successfully"
+              break
+            fi
+          done
+          # fail if unit still present.
+          if [[ $res -gt 0 ]] ; then
+            echo "Unit still present"
+            juju status
+            exit 1
+          fi
+          juju exec --unit microceph/0 -- microceph status
