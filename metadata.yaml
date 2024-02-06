@@ -2,7 +2,9 @@
 # See LICENSE file for licensing details.
 
 name: microceph
-summary: microceph
+display-name: microceph
+docs: https://discourse.charmhub.io/t/microceph-docs-index/12973
+summary: MicroCeph is snap-deployed Ceph with built-in clustering
 maintainer: Openstack Charmers <openstack-charmers@lists.ubuntu.com>
 description: |
   MicroCeph is a lightweight way of deploying a Ceph cluster designed

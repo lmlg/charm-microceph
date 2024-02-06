@@ -14,11 +14,12 @@
 
 """Tests for Microceph charm."""
 
-from unittest.mock import MagicMock, PropertyMock
+from unittest.mock import MagicMock, PropertyMock, patch
 
 import ops_sunbeam.test_utils as test_utils
 
 import charm
+import microceph
 
 
 class _MicroCephCharm(charm.MicroCephCharm):
@@ -57,7 +58,8 @@ class TestCharm(test_utils.CharmTestCase):
             timeout=180,
         )
 
-    def test_add_osds_action(self):
+    @patch.object(microceph, "subprocess")
+    def test_add_osds_action_with_device_id(self, subprocess):
         """Test action add_osds."""
         test_utils.add_complete_peer_relation(self.harness)
         self.harness._charm.peers.interface.state.joined = True
@@ -68,6 +70,33 @@ class TestCharm(test_utils.CharmTestCase):
 
         action_event.set_results.assert_called()
         action_event.fail.assert_not_called()
+        subprocess.run.assert_called_with(
+            ["sudo", "microceph", "disk", "add", "/dev/sdb"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=180,
+        )
+
+    @patch.object(microceph, "subprocess")
+    def test_add_osds_action_with_loop_spec(self, subprocess):
+        """Test action add_osds with loop file spec."""
+        test_utils.add_complete_peer_relation(self.harness)
+        self.harness._charm.peers.interface.state.joined = True
+
+        action_event = MagicMock()
+        action_event.params = {"loop-spec": "4G,3"}
+        self.harness.charm._add_osd_action(action_event)
+
+        action_event.set_results.assert_called()
+        action_event.fail.assert_not_called()
+        subprocess.run.assert_called_with(
+            ["sudo", "microceph", "disk", "add", "loop,4G,3"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=180,
+        )
 
     def test_add_osds_action_node_not_bootstrapped(self):
         """Test action add_osds when node not bootstrapped."""

@@ -4,4 +4,4 @@ pyroute2
 netifaces
 jsonschema
 jinja2
-git+https://opendev.org/openstack/charm-ops-sunbeam#egg=ops_sunbeam
+git+https://opendev.org/openstack/sunbeam-charms/#egg=ops-sunbeam&subdirectory=ops-sunbeam

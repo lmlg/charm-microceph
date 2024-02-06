@@ -33,6 +33,7 @@ from netifaces import AF_INET, gateways, ifaddresses
 from ops.charm import ActionEvent
 from ops.main import main
 
+import microceph
 from ceph_broker import get_named_key
 from relation_handlers import (
     CephClientProviderHandler,
@@ -118,31 +119,31 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
         event.set_results(disks)
 
     def _add_osd_action(self, event: ActionEvent):
-        """Add OSD disk to microceph."""
+        """Add OSD disks to microceph."""
         if not self.peers.interface.state.joined:
             event.fail("Node not yet joined in microceph cluster")
             return
 
-        device_ids = event.params.get("device-id").split(",")
-        for device_id in device_ids:
-            cmd = ["sudo", "microceph", "disk", "add", device_id]
+        # list of osd specs to be executed with disk add cmd.
+        add_osd_specs = list()
+
+        # fetch requested loop spec.
+        loop_spec = event.params.get("loop-spec", None)
+        if loop_spec is not None:
+            add_osd_specs.append(f"loop,{loop_spec}")
+
+        # fetch requested disks.
+        device_ids = event.params.get("device-id")
+        if device_ids is not None:
+            add_osd_specs.extend(device_ids.split(","))
+
+        for spec in add_osd_specs:
             try:
-                logger.debug(f'Running command {" ".join(cmd)}')
-                process = subprocess.run(
-                    cmd, capture_output=True, text=True, check=True, timeout=180
-                )
-                logger.debug(
-                    f"Command finished. stdout={process.stdout}, " f"stderr={process.stderr}"
-                )
+                microceph.add_osd_cmd(spec)
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-                logger.warning(e.stderr)
-                error_disk_already_exists = (
-                    "Failed adding new disk: Failed to record disk: Failed to create "
-                    '"disks" entry: UNIQUE constraint failed: disks.member_id, disks.path'
-                )
-                if error_disk_already_exists not in e.stderr:
-                    event.fail(e.stderr)
-                    return
+                logger.error(e.stderr)
+                event.fail(e.stderr)
+                return
 
         event.set_results({"status": "success"})
 

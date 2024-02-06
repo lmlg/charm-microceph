@@ -6,6 +6,11 @@ add-osd:
   description: |
     Add ceph disks (OSD) to cluster
   params:
+    loop-spec:
+      type: string
+      description: /
+        The specification of the files to be created and used as OSDs,
+        e.g. 4G,3 would create 3 file based OSDs of size 4GB.
     device-id:
       type: string
       description: |

@@ -20,11 +20,11 @@ unpartitioned-disks: '[{''model'': '''', ''size'': ''10.00GiB'', ''type'': ''vir
 
 2. Add the unpartitioned disks as OSD to the microceph cluster:
 
-       juju run microceph/0 add-osd <DISK PATH>
+       juju run microceph/0 add-osd device-id=<DISK PATH>
 
 Multiple disks can be added in the `add-osd` action.
 
-       juju run microceph/0 add-osd <DISK PATH>,<DISK PATH>
+       juju run microceph/0 add-osd device-id=<DISK PATH>,<DISK PATH>
 
 The output of `add-osd action` should look similar to this:
 
