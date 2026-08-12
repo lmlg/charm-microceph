@@ -2241,3 +2241,85 @@ class TestNetworkConfig(testbase.TestBaseCharm):
         with self.assertRaises(sunbeam_guard.BlockedExceptionError) as ctx:
             self.harness.charm.handle_config_leader_cluster_network(MagicMock())
         self.assertIn("ceph-cluster-network", str(ctx.exception))
+
+
+class TestPlacementReconciliation(testbase.TestBaseCharm):
+    PATCHES = ["subprocess"]
+
+    def setUp(self):
+        super().setUp(charm, self.PATCHES)
+        self.init_harness()
+
+    def set_config(self, config: dict) -> None:
+        """Update config without running the config-changed hook."""
+        self.harness.disable_hooks()
+        self.harness.update_config(config)
+        self.harness.enable_hooks()
+
+    @patch("charm.microceph.Client")
+    def test_reconcile_placement_non_leader_is_noop(self, cclient):
+        """When not leader, reconciliation is a no-op."""
+        self.harness.set_leader(False)
+        self.harness.charm._reconcile_placement(MagicMock())
+        cclient.from_socket().cluster.apply_placement.assert_not_called()
+
+    @patch("charm.microceph.Client")
+    def test_reconcile_placement_disabled_is_noop(self, cclient):
+        """When role-managed is disabled, reconciliation is a no-op."""
+        self.harness.set_leader(True)
+        self.set_config({"role-managed": False})
+        self.harness.charm._reconcile_placement(MagicMock())
+        cclient.from_socket().cluster.apply_placement.assert_not_called()
+
+    @patch("charm.microceph.Client")
+    def test_reconcile_placement_missing_relation_sends_empty_policy(self, cclient):
+        """When relation is missing, an empty policy is sent."""
+        self.harness.set_leader(True)
+        self.set_config({"role-managed": True})
+        self.harness.charm._reconcile_placement(MagicMock())
+        cclient.from_socket().cluster.apply_placement.assert_called_once_with(
+            {"mode": "reconcile", "members": {}}
+        )
+
+    @patch("charm.gethostname", return_value="node-a")
+    @patch("charm.microceph.Client")
+    def test_reconcile_placement_reconciles_assignments_correctly(self, cclient, mock_gethostname):
+        """When assignments exist, the correct placement policy is computed and sent."""
+        self.harness.set_leader(True)
+        self.set_config({"role-managed": True})
+
+        # Add relation and data
+        rel_id = self.harness.add_relation("role-assignment", "provider-charm")
+        self.harness.update_relation_data(
+            rel_id,
+            "provider-charm",
+            {
+                "assignments": json.dumps(
+                    {
+                        "microceph/0": {"status": "assigned", "roles": ["storage"]},
+                        "microceph/1": {"status": "assigned", "roles": ["control"]},
+                    }
+                )
+            },
+        )
+
+        # Set peer relation to map unit names to hostnames
+        peer_rel_id = self.harness.add_relation("peers", "microceph")
+        self.harness.add_relation_unit(peer_rel_id, "microceph/1")
+        self.harness.update_relation_data(
+            peer_rel_id,
+            "microceph/1",
+            {"microceph/1": "node-b"},
+        )
+
+        self.harness.charm._reconcile_placement(MagicMock())
+
+        cclient.from_socket().cluster.apply_placement.assert_called_once_with(
+            {
+                "mode": "reconcile",
+                "members": {
+                    "node-a": {"storage_eligible": True},
+                    "node-b": {"storage_eligible": False},
+                },
+            }
+        )

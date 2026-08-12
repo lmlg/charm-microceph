@@ -57,6 +57,7 @@ from relation_handlers import (
     MicroClusterNewNodeEvent,
     MicroClusterNodeAddedEvent,
     MicroClusterPeerHandler,
+    RoleAssignmentHandler,
     UpgradeNodeDoneEvent,
     UpgradeNodeRequestEvent,
     collect_peer_data,
@@ -378,6 +379,45 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             raise sunbeam_guard.BlockedExceptionError("Updating CA Certificates failed")
 
+    def role_managed_enabled(self) -> bool:
+        """Check if role-managed mode is enabled."""
+        return bool(self.model.config.get("role-managed", False))
+
+    def is_unit_storage_eligible(self) -> bool:
+        """Check if the local unit is eligible for OSD enrollment."""
+        if not self.role_managed_enabled():
+            return True
+
+        relation = self.model.get_relation("role-assignment")
+        if not relation:
+            return False
+
+        # Read the provider's app databag
+        provider_app_data = relation.data.get(relation.app)
+        if not provider_app_data:
+            return False
+
+        assignments_json = provider_app_data.get("assignments")
+        if not assignments_json:
+            return False
+
+        try:
+            assignments = json.loads(assignments_json)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+
+        unit_name = self.unit.name
+        unit_assignment = assignments.get(unit_name)
+        if not unit_assignment:
+            return False
+
+        # Must have "status": "assigned"
+        if unit_assignment.get("status") != "assigned":
+            return False
+
+        roles = unit_assignment.get("roles") or []
+        return "storage" in roles
+
     def is_valid_placement_directive(self, directive: str) -> bool:
         """Check if placement directive is valid or not."""
         supported_directives = ["*", ""]
@@ -564,6 +604,14 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
                     "identity-service" in self.mandatory_relations,
                 ),
             ),
+            "role-assignment": (
+                "role_assignment",
+                lambda: RoleAssignmentHandler(
+                    self,
+                    "role-assignment",
+                    self.configure_charm,
+                ),
+            ),
         }
 
         for relation_name, (attr_name, handler_factory) in relation_handlers.items():
@@ -685,6 +733,71 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
         self.handle_config_rgw_service(event)
         self.handle_config_leader_charm_upgrade()
         self.handle_config_leader_new_node(event)
+        self._reconcile_placement(event)
+
+    def _get_role_assignments(self):
+        """Fetch and parse OS106 assignments from the role-assignment relation."""
+        relation = self.model.get_relation("role-assignment")
+        if not relation:
+            return {}
+
+        provider_app_data = relation.data.get(relation.app)
+        if not provider_app_data:
+            return {}
+
+        assignments_json = provider_app_data.get("assignments")
+        if not assignments_json:
+            return {}
+
+        try:
+            return json.loads(assignments_json)
+        except Exception as e:
+            logger.error("Malformed role-assignment assignments data: %s", e)
+            return None
+
+    def _get_unit_to_hostname_map(self) -> dict:
+        """Map Juju unit names to hostnames (member names) using peer relation."""
+        unit_map = {self.unit.name: gethostname()}
+        peers = self.model.get_relation("peers")
+        if peers:
+            for unit in peers.units:
+                hostname = peers.data[unit].get(unit.name)
+                if hostname:
+                    unit_map[unit.name] = hostname
+        return unit_map
+
+    def _reconcile_placement(self, event: ops.framework.EventBase) -> None:
+        """Reconcile role-managed placement policy for the storage role."""
+        if not self.unit.is_leader() or not self.role_managed_enabled():
+            return
+
+        logger.info("Reconciling role-managed placement policy")
+        assignments = self._get_role_assignments()
+        if assignments is None:
+            # Malformed data -> freeze placement (do nothing)
+            return
+
+        unit_map = self._get_unit_to_hostname_map()
+        members = {}
+        for unit_name, assignment in assignments.items():
+            hostname = unit_map.get(unit_name)
+            if not hostname:
+                # Omit units whose hostnames are not yet known from the peer relation
+                continue
+
+            roles = assignment.get("roles") or []
+            status = assignment.get("status")
+            storage_eligible = status == "assigned" and "storage" in roles
+            members[hostname] = {"storage_eligible": storage_eligible}
+
+        policy = {"mode": "reconcile", "members": members}
+
+        try:
+            client = microceph.Client.from_socket()
+            client.cluster.apply_placement(policy)
+            logger.info("Successfully applied role-managed placement policy: %s", policy)
+        except Exception as e:
+            logger.error("Failed to apply role-managed placement policy to the snap: %s", e)
 
     def configure_app_non_leader(self, event: ops.framework.EventBase) -> None:
         """Configure the non leader unit."""
