@@ -739,21 +739,32 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
         """Fetch and parse OS106 assignments from the role-assignment relation."""
         relation = self.model.get_relation("role-assignment")
         if not relation:
-            return {}
+            return None
 
         provider_app_data = relation.data.get(relation.app)
         if not provider_app_data:
-            return {}
+            return None
 
         assignments_json = provider_app_data.get("assignments")
         if not assignments_json:
-            return {}
+            return None
 
         try:
-            return json.loads(assignments_json)
-        except Exception as e:
+            assignments = json.loads(assignments_json)
+        except (TypeError, ValueError, json.JSONDecodeError) as e:
             logger.error("Malformed role-assignment assignments data: %s", e)
             return None
+
+        if not isinstance(assignments, dict) or not assignments:
+            logger.warning("Assignments must be a non-empty dictionary")
+            return None
+
+        for unit_name, assignment in assignments.items():
+            if not isinstance(assignment, dict):
+                logger.warning("Assignment for %s must be a dictionary", unit_name)
+                return None
+
+        return assignments
 
     def _get_unit_to_hostname_map(self) -> dict:
         """Map Juju unit names to hostnames (member names) using peer relation."""
@@ -766,6 +777,54 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
                     unit_map[unit.name] = hostname
         return unit_map
 
+    def _parse_assignment(self, assignment, unit_name, unit_to_address):
+        """Fetch and parse RGW and NFS placements for a gateway role."""
+        roles = assignment.get("roles") or []
+        if "gateway" not in roles:
+            return False, []
+
+        workload_params = assignment.get("workload-params") or {}
+        flavors = workload_params.get("flavors")
+        if not isinstance(flavors, list) or not flavors:
+            logger.warning("Gateway role assigned but 'flavors' is missing or invalid")
+            return False, []
+
+        rgw = "rgw" in flavors
+        nfs = []
+
+        if "nfs" in flavors:
+            nfs_cluster_id = workload_params.get("nfs-cluster-id")
+            if isinstance(nfs_cluster_id, str) and nfs_cluster_id:
+                bind_address = unit_to_address.get(unit_name) or ""
+                if bind_address:
+                    nfs.append(
+                        {
+                            "group_id": "role-" + nfs_cluster_id,
+                            "bind_address": bind_address,
+                        }
+                    )
+                else:
+                    logger.warning("Unresolved NFS bind address")
+            else:
+                logger.warning("Invalid NFS assignment: %s" % workload_params)
+
+        return rgw, nfs
+
+    def _get_unit_to_address_map(self) -> dict:
+        """Map Juju unit names to public addresses (bind addresses) using peer relation."""
+        unit_to_address = {}
+        binding = self.model.get_binding("public")
+        if binding:
+            unit_to_address[self.unit.name] = str(binding.network.bind_address)
+
+        peers = self.model.get_relation("peers")
+        if peers:
+            for unit in peers.units:
+                addr = peers.data[unit].get("public-address")
+                if addr:
+                    unit_to_address[unit.name] = addr
+        return unit_to_address
+
     def _reconcile_placement(self, event: ops.framework.EventBase) -> None:
         """Reconcile role-managed placement policy for the storage role."""
         if not self.unit.is_leader() or not self.role_managed_enabled():
@@ -774,21 +833,36 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
         logger.info("Reconciling role-managed placement policy")
         assignments = self._get_role_assignments()
         if assignments is None:
-            # Malformed data -> freeze placement (do nothing)
+            # Missing or malformed data -> freeze placement (do nothing)
             return
 
-        unit_map = self._get_unit_to_hostname_map()
+        unit_to_hostname = self._get_unit_to_hostname_map()
+        unit_to_address = self._get_unit_to_address_map()
+
         members = {}
         for unit_name, assignment in assignments.items():
-            hostname = unit_map.get(unit_name)
+            hostname = unit_to_hostname.get(unit_name)
             if not hostname:
-                # Omit units whose hostnames are not yet known from the peer relation
+                # If no hostname, skip the unit.
                 continue
 
             roles = assignment.get("roles") or []
             status = assignment.get("status")
-            storage_eligible = status == "assigned" and "storage" in roles
-            members[hostname] = {"storage_eligible": storage_eligible}
+
+            # Default values.
+            control, storage, rgw, nfs = (False, False, False, [])
+
+            if status == "assigned":
+                control = "control" in roles
+                storage = "storage" in roles
+                rgw, nfs = self._parse_assignment(assignment, unit_name, unit_to_address)
+
+            members[hostname] = {
+                "control": control,
+                "storage_eligible": storage,
+                "rgw": rgw,
+                "nfs": nfs,
+            }
 
         policy = {"mode": "reconcile", "members": members}
 

@@ -2272,14 +2272,12 @@ class TestPlacementReconciliation(testbase.TestBaseCharm):
         cclient.from_socket().cluster.apply_placement.assert_not_called()
 
     @patch("charm.microceph.Client")
-    def test_reconcile_placement_missing_relation_sends_empty_policy(self, cclient):
-        """When relation is missing, an empty policy is sent."""
+    def test_reconcile_placement_missing_relation_freezes_placement(self, cclient):
+        """When relation is missing, placement is frozen."""
         self.harness.set_leader(True)
         self.set_config({"role-managed": True})
         self.harness.charm._reconcile_placement(MagicMock())
-        cclient.from_socket().cluster.apply_placement.assert_called_once_with(
-            {"mode": "reconcile", "members": {}}
-        )
+        cclient.from_socket().cluster.apply_placement.assert_not_called()
 
     @patch("charm.gethostname", return_value="node-a")
     @patch("charm.microceph.Client")
@@ -2318,8 +2316,78 @@ class TestPlacementReconciliation(testbase.TestBaseCharm):
             {
                 "mode": "reconcile",
                 "members": {
-                    "node-a": {"storage_eligible": True},
-                    "node-b": {"storage_eligible": False},
+                    "node-a": {
+                        "control": False,
+                        "storage_eligible": True,
+                        "rgw": False,
+                        "nfs": [],
+                    },
+                    "node-b": {
+                        "control": True,
+                        "storage_eligible": False,
+                        "rgw": False,
+                        "nfs": [],
+                    },
+                },
+            }
+        )
+
+    @patch("charm.gethostname", return_value="node-a")
+    @patch("charm.microceph.Client")
+    def test_reconcile_placement_reconciles_gateways_correctly(self, cclient, mock_gethostname):
+        """When gateway assignments exist, RGW and NFS flavors are correctly parsed and sent."""
+        self.harness.set_leader(True)
+        self.set_config({"role-managed": True})
+
+        # Add relation and data
+        rel_id = self.harness.add_relation("role-assignment", "provider-charm")
+        self.harness.update_relation_data(
+            rel_id,
+            "provider-charm",
+            {
+                "assignments": json.dumps(
+                    {
+                        "microceph/0": {"status": "assigned", "roles": ["storage"]},
+                        "microceph/1": {
+                            "status": "assigned",
+                            "roles": ["gateway"],
+                            "workload-params": {
+                                "flavors": ["rgw", "nfs"],
+                                "nfs-cluster-id": "alpha",
+                            },
+                        },
+                    }
+                )
+            },
+        )
+
+        # Set peer relation to map unit names to hostnames and public addresses
+        peer_rel_id = self.harness.add_relation("peers", "microceph")
+        self.harness.add_relation_unit(peer_rel_id, "microceph/1")
+        self.harness.update_relation_data(
+            peer_rel_id,
+            "microceph/1",
+            {"microceph/1": "node-b", "public-address": "10.0.0.14"},
+        )
+
+        self.harness.charm._reconcile_placement(MagicMock())
+
+        cclient.from_socket().cluster.apply_placement.assert_called_once_with(
+            {
+                "mode": "reconcile",
+                "members": {
+                    "node-a": {
+                        "control": False,
+                        "storage_eligible": True,
+                        "rgw": False,
+                        "nfs": [],
+                    },
+                    "node-b": {
+                        "control": False,
+                        "storage_eligible": False,
+                        "rgw": True,
+                        "nfs": [{"group_id": "role-alpha", "bind_address": "10.0.0.14"}],
+                    },
                 },
             }
         )
