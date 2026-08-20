@@ -39,6 +39,7 @@ provides:
 
 LIFECYCLE_HOOK = "#!/bin/sh\nexit 0\n"
 
+
 def create_dummy_provider_charm(target_dir):
     """Create a minimal bash-hook role-assignment Provider charm on the fly."""
     os.makedirs(target_dir, exist_ok=True)
