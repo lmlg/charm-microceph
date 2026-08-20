@@ -83,6 +83,18 @@ exit 0
         os.chmod(hook_path, 0o755)
 
 
+def zip_dir_to_charm(src_dir, dest_zip_path):
+    """Zip a directory's contents into a Juju-deployable .charm package."""
+    import zipfile
+
+    with zipfile.ZipFile(dest_zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+        for root, dirs, files in os.walk(src_dir):
+            for file in files:
+                abs_path = os.path.join(root, file)
+                rel_path = os.path.relpath(abs_path, src_dir)
+                zipf.write(abs_path, rel_path)
+
+
 @pytest.mark.abort_on_fail
 def test_storage_role_gating_and_reconciliation(
     juju: jubilant.Juju, deployed_microceph: str, attached_lxd_volume: str
@@ -107,12 +119,16 @@ def test_storage_role_gating_and_reconciliation(
 
     # Create and deploy our dummy role-assignment provider charm on the fly
     tmp_dir = tempfile.mkdtemp(prefix="dummy-provider-")
+    charm_path = os.path.join(tempfile.gettempdir(), "dummy-provider.charm")
     try:
         logger.info(f"Creating dummy provider charm in temporary directory: {tmp_dir}")
         create_dummy_provider_charm(tmp_dir)
 
+        logger.info(f"Zipping dummy provider charm directory into package: {charm_path}")
+        zip_dir_to_charm(tmp_dir, charm_path)
+
         logger.info("Deploying dummy role-assignment provider charm")
-        juju.deploy(tmp_dir, "dummy-provider")
+        juju.deploy(charm_path, "dummy-provider")
 
         # Relate microceph with dummy-provider
         logger.info("Relating microceph with dummy-provider")
@@ -132,5 +148,7 @@ def test_storage_role_gating_and_reconciliation(
         helpers.assert_osd_count(juju, APP_NAME, expected_osds=1)
 
     finally:
-        # Cleanup temporary directory
+        # Cleanup temporary directory and charm package
         shutil.rmtree(tmp_dir, ignore_errors=True)
+        if os.path.exists(charm_path):
+            os.remove(charm_path)
