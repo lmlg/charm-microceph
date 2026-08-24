@@ -37,6 +37,22 @@ provides:
     interface: role-assignment
 """
 
+MANIFEST_CONTENTS = """
+charmcraft-version: 4.3.1
+charmcraft-started-at: '2026-08-24T19:13:50.480933'
+bases:
+- name: ubuntu
+  channel: '24.04'
+  architectures:
+  - amd64
+analysis:
+  attributes:
+  - name: language
+    result: unknown
+  - name: framework
+    result: unknown
+"""
+
 LIFECYCLE_HOOK = "#!/bin/sh\nexit 0\n"
 
 
@@ -47,6 +63,9 @@ def create_dummy_provider_charm(target_dir):
 
     with open(os.path.join(target_dir, "metadata.yaml"), "w") as f:
         f.write(METADATA_CONTENTS)
+
+    with open(os.path.join(target_dir, "manifest.yaml"), "w") as f:
+        f.write(MANIFEST_CONTENTS)
 
     # All lifecycle hooks can just exit 0
     for hook in ["install", "start", "config-changed"]:
