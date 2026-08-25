@@ -53,7 +53,10 @@ analysis:
     result: unknown
 """
 
-LIFECYCLE_HOOK = "#!/bin/sh\nexit 0\n"
+LIFECYCLE_HOOK = """#!/bin/sh
+status-set active Active
+exit 0
+"""
 
 
 def create_dummy_provider_charm(target_dir):
@@ -148,14 +151,16 @@ def test_storage_role_gating_and_reconciliation(
 
         logger.info("Deploying dummy role-assignment provider charm")
         juju.deploy(charm_path, "dummy-provider")
+        with helpers.fast_forward(juju):
+            helpers.wait_for_apps(juju, "dummy-provider", timeout=600)
 
         # Relate microceph with dummy-provider
         logger.info("Relating microceph with dummy-provider")
-        juju.integrate(f"{APP_NAME}:role-assignment", "dummy-provider:role-assignment")
+        juju.integrate(f"{APP_NAME}", "dummy-provider")
 
         # Wait for both dummy-provider and microceph to stabilize
         with helpers.fast_forward(juju):
-            helpers.wait_for_apps(juju, APP_NAME, timeout=600)
+            helpers.wait_for_apps(juju, APP_NAME, "dummy-provider", timeout=600)
 
         # Run add-osd action which should now succeed since microceph/0 has the storage role
         logger.info("Verifying add-osd action succeeds now that unit is assigned the storage role")
