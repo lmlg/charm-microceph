@@ -36,6 +36,7 @@ import ops_sunbeam.guard as sunbeam_guard
 import ops_sunbeam.relation_handlers as sunbeam_rhandlers
 from charms.ceph_mon.v0 import ceph_cos_agent
 from charms.operator_libs_linux.v2 import snap
+from charms.role_distributor.v0.role_assignment import RoleAssignmentRequirer
 from ops.main import main
 from ops.model import ActiveStatus, BlockedStatus
 
@@ -57,7 +58,6 @@ from relation_handlers import (
     MicroClusterNewNodeEvent,
     MicroClusterNodeAddedEvent,
     MicroClusterPeerHandler,
-    RoleAssignmentHandler,
     UpgradeNodeDoneEvent,
     UpgradeNodeRequestEvent,
     collect_peer_data,
@@ -97,6 +97,8 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
             is_mgr_available_cb=microceph.cos_agent_is_mgr_available_cb,
         )
 
+        self.role_assignment = RoleAssignmentRequirer(self, "role-assignment")
+
         # Initialise handlers for events.
         self.framework.observe(self.on.install, self._on_install)
         self.framework.observe(self.on.stop, self._on_stop)
@@ -104,6 +106,14 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
         self.framework.observe(self.on.set_pool_size_action, self._set_pool_size_action)
         self.framework.observe(self.on.peers_relation_created, self._on_peer_relation_created)
         self.framework.observe(self.on["peers"].relation_departed, self._on_peer_relation_departed)
+        self.framework.observe(
+            self.role_assignment.on.role_assignment_changed,
+            self._on_role_assignment_changed,
+        )
+        self.framework.observe(
+            self.role_assignment.on.role_assignment_revoked,
+            self._on_role_assignment_revoked,
+        )
 
     def _on_install(self, event: ops.framework.EventBase) -> None:
         config = self.model.config.get
@@ -383,40 +393,19 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
         """Check if role-managed mode is enabled."""
         return bool(self.model.config.get("role-managed", False))
 
-    def is_unit_storage_eligible(self) -> bool:
+    def is_unit_storage_eligible(self):
         """Check if the local unit is eligible for OSD enrollment."""
         if not self.role_managed_enabled():
             return True
 
-        relation = self.model.get_relation("role-assignment")
-        if not relation:
+        assignment = self.role_assignment.get_assignment()
+        if not assignment:
             return False
 
-        # Read the provider's app databag
-        provider_app_data = relation.data.get(relation.app)
-        if not provider_app_data:
+        if assignment.status != "assigned":
             return False
 
-        assignments_json = provider_app_data.get("assignments")
-        if not assignments_json:
-            return False
-
-        try:
-            assignments = json.loads(assignments_json)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return False
-
-        unit_name = self.unit.name
-        unit_assignment = assignments.get(unit_name)
-        if not unit_assignment:
-            return False
-
-        # Must have "status": "assigned"
-        if unit_assignment.get("status") != "assigned":
-            return False
-
-        roles = unit_assignment.get("roles") or []
-        return "storage" in roles
+        return "storage" in (assignment.roles or [])
 
     def is_valid_placement_directive(self, directive: str) -> bool:
         """Check if placement directive is valid or not."""
@@ -602,14 +591,6 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
                     self.service_endpoints,
                     self.model.config["region"],
                     "identity-service" in self.mandatory_relations,
-                ),
-            ),
-            "role-assignment": (
-                "role_assignment",
-                lambda: RoleAssignmentHandler(
-                    self,
-                    "role-assignment",
-                    self.configure_charm,
                 ),
             ),
         }
@@ -872,6 +853,14 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
             logger.info("Successfully applied role-managed placement policy: %s", policy)
         except Exception as e:
             logger.error("Failed to apply role-managed placement policy to the snap: %s", e)
+
+    def _on_role_assignment_changed(self, event):
+        """Handle role-assignment changed event."""
+        self.configure_charm(event)
+
+    def _on_role_assignment_revoked(self, event):
+        """Handle role-assignment revoked event."""
+        self.configure_charm(event)
 
     def configure_app_non_leader(self, event: ops.framework.EventBase) -> None:
         """Configure the non leader unit."""

@@ -901,37 +901,3 @@ class CephMdsProviderHandler(CephClientProviderHandler):
         """For ceph-mds, we want to change the key name and set the FSID."""
         data["fsid"] = utils.get_fsid()
         data[self.mds_name + "_mds_key"] = data.pop("key")
-
-
-class RoleAssignmentHandler(RelationHandler):
-    """Handler for role-assignment relation."""
-
-    def __init__(self, charm, relation_name, callback_f):
-        super().__init__(charm, relation_name, callback_f)
-
-    def setup_event_handler(self) -> Object:
-        """Observe role-assignment events."""
-        logger.debug("Setting up role-assignment event handler")
-
-        self.framework.observe(
-            self.charm.on[self.relation_name].relation_joined,
-            self._on_relation_event,
-        )
-        self.framework.observe(
-            self.charm.on[self.relation_name].relation_changed,
-            self._on_relation_event,
-        )
-        self.framework.observe(
-            self.charm.on[self.relation_name].relation_broken,
-            self._on_relation_event,
-        )
-        return self
-
-    @property
-    def ready(self):
-        """Check if handler is ready."""
-        return True
-
-    def _on_relation_event(self, event: EventBase):
-        """Invoke the callback on relation events."""
-        self.callback_f(event)
