@@ -176,3 +176,57 @@ def test_storage_role_gating_and_reconciliation(
         shutil.rmtree(tmp_dir, ignore_errors=True)
         if os.path.exists(charm_path):
             os.remove(charm_path)
+
+
+@pytest.mark.abort_on_fail
+def test_storage_role_enable_and_config_both(
+    juju: jubilant.Juju, deployed_microceph: str, attached_lxd_volume: str
+):
+    """Verify that enabling role-managed mode and configuring storage at the same time works."""
+    # Reset role-managed mode to False to ensure clean slate (inert starting state)
+    logger.info("Resetting role-managed placement mode and osd-devices config")
+    juju.config(APP_NAME, {"role-managed": False, "osd-devices": ""})
+    with helpers.fast_forward(juju):
+        helpers.wait_for_apps(juju, APP_NAME, timeout=300)
+
+    # Create and deploy our dummy role-assignment provider charm on the fly
+    tmp_dir = tempfile.mkdtemp(prefix="dummy-provider-")
+    charm_path = os.path.join(tempfile.gettempdir(), "dummy-provider.charm")
+    try:
+        logger.info(f"Creating dummy provider charm in temporary directory: {tmp_dir}")
+        create_dummy_provider_charm(tmp_dir)
+
+        logger.info(f"Zipping dummy provider charm directory into package: {charm_path}")
+        zip_dir_to_charm(tmp_dir, charm_path)
+
+        logger.info("Deploying dummy role-assignment provider charm")
+        juju.deploy(charm_path, "dummy-provider")
+        with helpers.fast_forward(juju):
+            helpers.wait_for_apps(juju, "dummy-provider", timeout=600)
+
+        # Relate microceph with dummy-provider
+        logger.info("Relating microceph with dummy-provider")
+        juju.integrate(f"{APP_NAME}", "dummy-provider")
+
+        with helpers.fast_forward(juju):
+            helpers.wait_for_apps(juju, APP_NAME, timeout=300)
+
+        # Configure both role-managed and osd-devices configuration.
+        logger.info(
+            "Enabling role-managed placement mode and configuring osd-devices"
+        )
+        juju.config(APP_NAME, {"role-managed": True, "osd-devices": "eq(@type,'virtio')"})
+
+        # Wait for the change to settle and OSD auto-enrollment to trigger
+        with helpers.fast_forward(juju):
+            helpers.wait_for_apps(juju, APP_NAME, timeout=600)
+
+        # Verify OSD was successfully auto-enrolled in the cluster via config
+        logger.info("Verifying OSD count")
+        helpers.assert_osd_count(juju, APP_NAME, expected_osds=1)
+
+    finally:
+        # Cleanup temporary directory and charm package
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        if os.path.exists(charm_path):
+            os.remove(charm_path)

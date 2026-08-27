@@ -734,7 +734,7 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
             assignments = json.loads(assignments_json)
         except (TypeError, ValueError, json.JSONDecodeError) as e:
             logger.error("Malformed role-assignment assignments data: %s", e)
-            return None
+            raise
 
         if not isinstance(assignments, dict) or not assignments:
             logger.warning("Assignments must be a non-empty dictionary")
@@ -812,7 +812,13 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
             return
 
         logger.info("Reconciling role-managed placement policy")
-        assignments = self._get_role_assignments()
+        try:
+            assignments = self._get_role_assignments()
+        except (TypeError, ValueError, json.JSONDecodeError) as e:
+            logger.warning("Malformed assignments JSON: %s", e)
+            self.status.set(BlockedStatus("Malformed role-assignment assignments data"))
+            return
+
         if assignments is None:
             # Missing or malformed data -> freeze placement (do nothing)
             return

@@ -2391,3 +2391,26 @@ class TestPlacementReconciliation(testbase.TestBaseCharm):
                 },
             }
         )
+
+    @patch("charm.microceph.Client")
+    def test_reconcile_placement_malformed_assignments_blocks_charm(self, cclient):
+        """When assignments data is malformed, the charm enters blocked status."""
+        self.harness.set_leader(True)
+        self.set_config({"role-managed": True})
+
+        # Add relation with malformed assignments JSON string
+        rel_id = self.harness.add_relation("role-assignment", "provider-charm")
+        self.harness.update_relation_data(
+            rel_id,
+            "provider-charm",
+            {"assignments": "invalid-json{"},
+        )
+
+        self.harness.charm._reconcile_placement(MagicMock())
+
+        # Verify apply_placement is not called and the charm status is BlockedStatus
+        cclient.from_socket().cluster.apply_placement.assert_not_called()
+        self.assertIsInstance(self.harness.charm.status.status, BlockedStatus)
+        self.assertIn(
+            "Malformed role-assignment assignments data", self.harness.charm.status.status.message
+        )
