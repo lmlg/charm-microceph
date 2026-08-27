@@ -212,9 +212,7 @@ def test_storage_role_enable_and_config_both(
             helpers.wait_for_apps(juju, APP_NAME, timeout=300)
 
         # Configure both role-managed and osd-devices configuration.
-        logger.info(
-            "Enabling role-managed placement mode and configuring osd-devices"
-        )
+        logger.info("Enabling role-managed placement mode and configuring osd-devices")
         juju.config(APP_NAME, {"role-managed": True, "osd-devices": "eq(@type,'virtio')"})
 
         # Wait for the change to settle and OSD auto-enrollment to trigger
