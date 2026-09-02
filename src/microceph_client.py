@@ -260,3 +260,7 @@ class ClusterService(BaseService):
     def apply_placement(self, policy: dict) -> dict:
         """Install and apply the active per-member placement policy."""
         return self._put("/1.0/placement", data=json.dumps(policy))
+
+    def delete_placement(self) -> dict:
+        """Remove/delete any active placement policy."""
+        return self._delete("/1.0/placement")

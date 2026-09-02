@@ -105,8 +105,9 @@ class StorageHandler(Object):
 
         if not self.charm.is_unit_storage_eligible():
             logger.warning(
-                "Storage attachment skipped: unit is not eligible for storage in role-managed mode."
+                "Storage attachment deferred: unit is not yet eligible for storage in role-managed mode."
             )
+            event.defer()
             return
 
         self._clean_stale_osd_data()
