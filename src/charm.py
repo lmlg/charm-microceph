@@ -27,7 +27,6 @@ import subprocess
 from pathlib import Path
 from socket import gethostname
 from subprocess import CalledProcessError, TimeoutExpired
-from tenacity import retry, wait_fixed, stop_after_attempt
 from typing import List
 
 import netifaces
@@ -40,6 +39,7 @@ from charms.operator_libs_linux.v2 import snap
 from charms.role_distributor.v0.role_assignment import RoleAssignmentRequirer, UnitRoleAssignment
 from ops.main import main
 from ops.model import ActiveStatus, BlockedStatus
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 import ceph
 import cluster
