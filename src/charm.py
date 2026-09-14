@@ -27,6 +27,7 @@ import subprocess
 from pathlib import Path
 from socket import gethostname
 from subprocess import CalledProcessError, TimeoutExpired
+from tenacity import retry, wait_fixed, stop_after_attempt
 from typing import List
 
 import netifaces
@@ -913,6 +914,7 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
             }
         return members
 
+    @retry(wait=wait_fixed(5), stop=stop_after_attempt(10))
     def _delete_placement_policy(self) -> None:
         """Clear active placement policy from the snap."""
         logger.info("role-managed disabled; clearing any active placement policy from the snap")
@@ -980,10 +982,12 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
     def _on_role_assignment_changed(self, event):
         """Handle role-assignment changed event."""
         self.configure_charm(event)
+        self.storage._on_config_changed_osd_devices(event)
 
     def _on_role_assignment_revoked(self, event):
         """Handle role-assignment revoked event."""
         self.configure_charm(event)
+        self.storage._on_config_changed_osd_devices(event)
 
     def configure_app_non_leader(self, event: ops.framework.EventBase) -> None:
         """Configure the non leader unit."""
