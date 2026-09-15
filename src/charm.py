@@ -923,6 +923,7 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
             client.cluster.delete_placement()
         except Exception as e:
             logger.error("Failed to delete/clear placement policy from the snap: %s", e)
+            raise e
 
     def _check_assignments_frozen(self, assignments: dict) -> bool:
         """Check if any assignment is in a pending or error state."""
