@@ -935,7 +935,9 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
                 return True
         return False
 
-    def _apply_placement_policy(self, policy: dict, event: ops.framework.EventBase) -> None:
+    def _apply_placement_policy(
+        self, policy: dict, event: ops.framework.EventBase, fatal=True
+    ) -> None:
         """Apply placement policy to the snap."""
         try:
             client = microceph.Client.from_socket()
@@ -943,6 +945,8 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
             logger.info("Successfully applied role-managed placement policy: %s", policy)
         except Exception as e:
             logger.error("Failed to apply role-managed placement policy to the snap: %s", e)
+            if not fatal:
+                return
             event.defer()
             raise sunbeam_guard.WaitingExceptionError(
                 "waiting for microceph snap API to apply placement policy"
@@ -963,7 +967,7 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
             logger.warning(
                 "role-assignment relation is gone; standing down placement to secure lockdown"
             )
-            self._apply_placement_policy({"mode": "reconcile", "members": {}}, event)
+            self._apply_placement_policy({"mode": "reconcile", "members": {}}, event, False)
             return
 
         logger.info("Reconciling role-managed placement policy")
