@@ -2273,10 +2273,21 @@ class TestPlacementReconciliation(testbase.TestBaseCharm):
         cclient.from_socket().cluster.delete_placement.assert_called_once()
 
     @patch("charm.microceph.Client")
-    def test_reconcile_placement_missing_relation_freezes_placement(self, cclient):
-        """When relation is missing, placement is frozen."""
+    def test_reconcile_placement_missing_relation_stands_down_placement(self, cclient):
+        """When relation is missing, placement is stood down to secure lockdown."""
         self.harness.set_leader(True)
         self.set_config({"role-managed": True})
+        self.harness.charm._reconcile_placement(MagicMock())
+        cclient.from_socket().cluster.apply_placement.assert_called_once_with(
+            {"mode": "reconcile", "members": {}}
+        )
+
+    @patch("charm.microceph.Client")
+    def test_reconcile_placement_active_relation_missing_data_freezes_placement(self, cclient):
+        """When relation exists but data is missing, placement is frozen."""
+        self.harness.set_leader(True)
+        self.set_config({"role-managed": True})
+        self.harness.add_relation("role-assignment", "provider-charm")
         self.harness.charm._reconcile_placement(MagicMock())
         cclient.from_socket().cluster.apply_placement.assert_not_called()
 

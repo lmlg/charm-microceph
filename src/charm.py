@@ -831,7 +831,7 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
         if "gateway" not in roles:
             return False, []
 
-        workload_params = assignment.workload_params
+        workload_params = assignment.workload_params or {}
         flavors = workload_params.get("flavors")
         if not isinstance(flavors, list) or not flavors:
             logger.warning("Gateway role assigned but 'flavors' is missing or invalid")
@@ -957,6 +957,15 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
             self._delete_placement_policy()
             return
 
+        # Check if relation is completely gone (Deliberate administrative removal)
+        relation = self.model.get_relation("role-assignment")
+        if relation is None:
+            logger.warning(
+                "role-assignment relation is gone; standing down placement to secure lockdown"
+            )
+            self._apply_placement_policy({"mode": "reconcile", "members": {}}, event)
+            return
+
         logger.info("Reconciling role-managed placement policy")
         try:
             assignments = self._get_role_assignments()
@@ -965,7 +974,14 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
             self.status.set(BlockedStatus("Malformed role-assignment assignments data"))
             return
 
-        if assignments is None or self._check_assignments_frozen(assignments):
+        # Check if relation exists but data is temporarily missing (Transient flap)
+        if assignments is None:
+            logger.warning(
+                "Active role-assignment relation has empty/missing assignment data; freezing placement policy to prevent disruption."
+            )
+            return
+
+        if self._check_assignments_frozen(assignments):
             return
 
         unit_to_hostname = self._get_unit_to_hostname_map()
