@@ -34,8 +34,28 @@ echo "==> Adding model '${MODEL_NAME}'"
 juju add-model "${MODEL_NAME}"
 
 # --- Deploy the COS Lite bundle ---
-echo "==> Deploying cos-lite bundle"
-juju deploy cos-lite --trust
+# api.charmhub.io can drop connections transiently during charm resolution,
+# which fails the whole job after the k8s cluster was already stood up.
+# A resolution failure creates no applications, so retrying is safe; a
+# mid-deploy failure that did create applications reports "already exists"
+# and is not retried.
+# https://github.com/canonical/charm-microceph/issues/359
+DEPLOY_ATTEMPTS="${DEPLOY_ATTEMPTS:-3}"
+deploy_output=""
+for attempt in $(seq 1 "${DEPLOY_ATTEMPTS}"); do
+  echo "==> Deploying cos-lite bundle (attempt ${attempt}/${DEPLOY_ATTEMPTS})"
+  if deploy_output=$(juju deploy cos-lite --trust 2>&1); then
+    echo "${deploy_output}"
+    break
+  fi
+  echo "${deploy_output}" >&2
+  if [[ "${deploy_output}" =~ (EOF|connection reset|connection refused|attempt count exceeded|timed out) ]] \
+    && [[ "${attempt}" -lt "${DEPLOY_ATTEMPTS}" ]]; then
+    sleep $((attempt * 30))
+    continue
+  fi
+  exit 1
+done
 
 # --- Grant cluster trust to every COS Lite application ---
 # The --trust flag on bundle deploy does not always propagate correctly.
