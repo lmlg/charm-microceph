@@ -756,16 +756,25 @@ jobs:
           juju wait-for application microceph --query='status=="blocked"'
           juju status
           juju status blocked | egrep '^microceph/.*Cannot upgrade.*to non/exist'
-          # set back
+          # set back and wait for the application to settle before the next
+          # step samples its status, so the next blocked assertion cannot
+          # race the stale blocked state (and message) from this phase.
           juju config microceph snap-channel=reef/stable
-          sleep 10
+          juju wait-for application microceph --query='status=="active"' --timeout=10m
 
       - name: Test upgrading with unhealthy cluster blocks
         run: |
           set -eux
           juju config microceph snap-channel=reef/edge
-          sleep 10
-          juju wait-for application microceph --query='status=="blocked"'
+          # Block reason must be the new one (ceph health), not the message
+          # left over from the non/exist phase: wait for the message instead
+          # of sampling it once after a fixed sleep.
+          for i in $(seq 1 60); do
+            if juju status blocked | egrep -q '^microceph/.*Cannot upgrade, ceph health not ok'; then
+              break
+            fi
+            sleep 10
+          done
           juju status
           juju status blocked | egrep '^microceph/.*Cannot upgrade, ceph health not ok'
           # Should be in WARN as we don't have OSDs
