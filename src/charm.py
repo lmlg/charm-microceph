@@ -1127,7 +1127,17 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
                     )
                     event.fail()
                 return
-            raise e
+            # set-rf is idempotent and this handler re-runs on every
+            # config-changed, so a transient failure here (typically the
+            # daemon restarting mid snap-upgrade) is retried on a later hook
+            # instead of leaving the leader permanently blocked with no
+            # further event to recover it.
+            # https://github.com/canonical/charm-microceph/issues/358
+            logger.warning("Failed to set pool replication factor, deferring: %s", e)
+            event.defer()
+            raise sunbeam_guard.WaitingExceptionError(
+                "waiting for microceph daemon to set pool replication factor"
+            )
 
     def handle_config_rgw_service(self, event: ops.framework.EventBase) -> None:
         """Enable/Disable RGW service."""

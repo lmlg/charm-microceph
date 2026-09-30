@@ -2235,3 +2235,48 @@ class TestNetworkConfig(testbase.TestBaseCharm):
         with self.assertRaises(sunbeam_guard.BlockedExceptionError) as ctx:
             self.harness.charm.handle_config_leader_cluster_network(MagicMock())
         self.assertIn("ceph-cluster-network", str(ctx.exception))
+
+
+class TestConfigLeaderCephPoolPgs(testbase.TestBaseCharm):
+    """Tests for the leader's pool replication/PGs config handler."""
+
+    # No module-level patches: the tests raise real CalledProcessErrors that
+    # the handler must catch, so the subprocess module must stay real.
+    PATCHES = []
+
+    def setUp(self):
+        """Setup MicroCeph Charm tests."""
+        super().setUp(charm, self.PATCHES)
+        self.init_harness()
+
+    def set_config(self, config: dict) -> None:
+        """Update config without running the config-changed hook."""
+        self.harness.disable_hooks()
+        self.harness.update_config(config)
+        self.harness.enable_hooks()
+
+    @patch.object(charm.MicroCephCharm, "ready_for_service")
+    @patch("ceph.ceph_config_set")
+    @patch.object(microceph, "set_pool_size")
+    def test_pool_pgs_transient_failure_defers_and_waits(
+        self, set_pool_size, ceph_config_set, ready
+    ):
+        """A transient set-rf failure (daemon restarting mid-upgrade) is retried.
+
+        Re-raising it left the leader permanently blocked: no later event
+        re-ran the idempotent command, so the upgrade never completed.
+        """
+        ready.return_value = True
+        self.harness.set_leader()
+        self.set_config({"default-pool-size": 3})
+        set_pool_size.side_effect = CalledProcessError(
+            1, ["sudo", "microceph", "pool", "set-rf", "--size", "3", ""], stderr="Error: EOF"
+        )
+
+        event = MagicMock()
+        with self.assertRaises(sunbeam_guard.WaitingExceptionError):
+            self.harness.charm.handle_config_leader_ceph_pool_pgs(event)
+
+        event.defer.assert_called_once()
+        # Nothing after the failed command ran; the retry redoes the lot.
+        ceph_config_set.assert_not_called()
