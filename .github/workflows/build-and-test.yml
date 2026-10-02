@@ -51,32 +51,39 @@ jobs:
         run: ./tests/scripts/ci_helpers.sh validate_terragrunt_module
 
   build:
-    name: Build the charm
+    name: Build the charms
+    uses: ./.github/workflows/build.yaml
+
+  # Infra gate for the self-hosted matrix: on a gross Snap Store, Ubuntu
+  # archive or CharmHub outage, fail this one job and skip every suite
+  # instead of recording one failure per suite on the ci-health dashboard.
+  # Modeled on canonical/microceph's preflight gate
+  # (https://github.com/canonical/microceph/pull/852). It cannot see
+  # inside the LXD instances/VMs the suites create later.
+  preflight:
+    name: Preflight infra gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Checkout
+      # The probes live in a script so other branches and workflows can reuse them.
+      - name: Checkout preflight script
         uses: actions/checkout@v7
         with:
-          fetch-depth: 1
-      - name: Setup LXD
-        uses: canonical/setup-lxd@v0.1.1
-        with:
-          channel: 5.21/stable
-      - name: Build charm(s)
-        id: builder
-        run: |
-          # multi-base charmcraft.yaml requires charmcraft >= 4.1, which
-          # latest/candidate carries (4.2.x at the time of writing).
-          sudo snap install charmcraft --classic --channel=latest/candidate
-          charmcraft pack -v
-      - name: Upload built charm
-        uses: actions/upload-artifact@v4
-        with:
-          name: charms
-          path: "*.charm"
+          sparse-checkout: tests/scripts/preflight.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Probe Snap Store, Ubuntu archive and CharmHub reachability
+        run: ./tests/scripts/preflight.sh probe_endpoints
+
+      - name: Download Snap Store canary
+        run: ./tests/scripts/preflight.sh snap_canary
+
+      - name: Resolve CharmHub canary charms
+        run: ./tests/scripts/preflight.sh charmhub_canary microceph ceph-mon ceph-osd ceph-fs ceph-radosgw grafana-agent opentelemetry-collector cos-lite
 
   integration-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -135,6 +142,7 @@ jobs:
 
   functional-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -182,6 +190,7 @@ jobs:
 
   juju-cluster-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -261,6 +270,7 @@ jobs:
 
   juju-cluster-maintenance-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -551,6 +561,7 @@ jobs:
 
   juju-wipe-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -596,6 +607,7 @@ jobs:
 
   juju-single-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -697,6 +709,7 @@ jobs:
 
   snap-upgrade-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -743,16 +756,25 @@ jobs:
           juju wait-for application microceph --query='status=="blocked"'
           juju status
           juju status blocked | egrep '^microceph/.*Cannot upgrade.*to non/exist'
-          # set back
+          # set back and wait for the application to settle before the next
+          # step samples its status, so the next blocked assertion cannot
+          # race the stale blocked state (and message) from this phase.
           juju config microceph snap-channel=reef/stable
-          sleep 10
+          juju wait-for application microceph --query='status=="active"' --timeout=10m
 
       - name: Test upgrading with unhealthy cluster blocks
         run: |
           set -eux
           juju config microceph snap-channel=reef/edge
-          sleep 10
-          juju wait-for application microceph --query='status=="blocked"'
+          # Block reason must be the new one (ceph health), not the message
+          # left over from the non/exist phase: wait for the message instead
+          # of sampling it once after a fixed sleep.
+          for i in $(seq 1 60); do
+            if juju status blocked | egrep -q '^microceph/.*Cannot upgrade, ceph health not ok'; then
+              break
+            fi
+            sleep 10
+          done
           juju status
           juju status blocked | egrep '^microceph/.*Cannot upgrade, ceph health not ok'
           # Should be in WARN as we don't have OSDs
@@ -826,6 +848,7 @@ jobs:
 
   juju-network-spaces-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -895,6 +918,7 @@ jobs:
 
   juju-mds-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -968,6 +992,7 @@ jobs:
 
   juju-remote-relation-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -1054,7 +1079,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: microceph_juju_mds_test_logs
+          name: microceph_juju_remote_relation_test_logs
           path: logs
           retention-days: 30
 
@@ -1064,6 +1089,7 @@ jobs:
 
   juju-adopt-ceph-test:
     needs:
+      - preflight
       - build
     name: Adopt Charmed ceph cluster test
     runs-on: self-hosted-linux-amd64-noble-xlarge
@@ -1155,7 +1181,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: microceph_juju_mds_test_logs
+          name: microceph_juju_adopt_test_logs
           path: logs
           retention-days: 30
 
@@ -1165,6 +1191,7 @@ jobs:
 
   juju-storage-cluster-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -1244,6 +1271,7 @@ jobs:
 
   az-fresh-deploy-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -1306,6 +1334,7 @@ jobs:
 
   az-upgrade-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
@@ -1376,12 +1405,15 @@ jobs:
 
   cos-integration-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build
     name: COS integration (${{ matrix.agent }})
     runs-on: self-hosted-linux-amd64-noble-xlarge
-    timeout-minutes: 120
+    # The k8s bring-up now waits up to K8S_CMD_TIMEOUT (10m) per k8s CLI call;
+    # give the job matching headroom. Successful runs take 25-40 minutes.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -1418,6 +1450,7 @@ jobs:
         run: bash tests/scripts/k8s/01-setup-lxd-vm.sh
 
       - name: Deploy k8s
+        timeout-minutes: 30
         run: bash tests/scripts/k8s/02-deploy-k8s.sh
 
       - name: Add Juju cloud and bootstrap controller
@@ -1430,8 +1463,18 @@ jobs:
 
       - name: Bootstrap localhost controller
         run: |
-          set -eux
+          set -euxo pipefail
           juju bootstrap localhost lxd
+          # The LXD controller must not sit inside MetalLB's VIP range
+          # (<subnet>.220-.240), or the Juju client ends up talking to the
+          # k8s controller/traefik with the wrong CA. 01-setup-lxd-vm.sh
+          # restricts the bridge's DHCP pool; this guards against regressions.
+          ctrl_endpoints=$(juju show-controller lxd --format json | jq -r '.lxd.details["api-endpoints"][]')
+          echo "${ctrl_endpoints}"
+          if echo "${ctrl_endpoints}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.(22[0-9]|23[0-9]|240):'; then
+            echo "ERROR: LXD controller address collides with the MetalLB VIP range" >&2
+            exit 1
+          fi
 
       - name: Deploy MicroCeph charm over LXD
         run: |
@@ -1487,6 +1530,8 @@ jobs:
           set -eux
           juju status -m lxd:microceph || true
           juju status -m ck8s-cloud:cos-lite || true
+          echo "==> LXD instances (IPv4 addresses, to spot MetalLB VIP collisions):"
+          lxc list || true
           echo "==> k8s pods in cos-lite namespace:"
           lxc exec k8s-node -- k8s kubectl get pods -n cos-lite -o wide || true
 
@@ -1504,8 +1549,8 @@ jobs:
           juju status -m ck8s-cloud:cos-lite -o logs/cos-lite-status.yaml || true
           cat logs/cos-lite-status.yaml || true
 
-          echo "==> COS Lite Juju debug-log (last 100 lines)"
-          juju debug-log -m ck8s-cloud:cos-lite --replay --tail 100 --no-tail > logs/cos-lite-debug-log.txt 2>&1 || true
+          echo "==> COS Lite Juju debug-log (last 200 lines)"
+          juju debug-log -m ck8s-cloud:cos-lite --replay --no-tail 2>&1 | tail -n 200 > logs/cos-lite-debug-log.txt || true
 
           echo "==> k8s pod status in cos-lite namespace"
           lxc exec k8s-node -- k8s kubectl get pods -n cos-lite -o wide > logs/k8s-pods.txt 2>&1 || true
@@ -1518,6 +1563,12 @@ jobs:
           echo "==> k8s node resource allocation"
           lxc exec k8s-node -- k8s kubectl describe nodes > logs/k8s-nodes.txt 2>&1 || true
           grep -A 15 "Allocated resources" logs/k8s-nodes.txt || true
+
+          echo "==> k8s persistent volume claims and VM disk usage"
+          lxc exec k8s-node -- k8s kubectl get pvc -A -o wide > logs/k8s-pvc.txt 2>&1 || true
+          cat logs/k8s-pvc.txt || true
+          lxc exec k8s-node -- df -h / /var/snap/k8s/common > logs/k8s-vm-df.txt 2>&1 || true
+          cat logs/k8s-vm-df.txt || true
 
       - name: Upload logs
         if: failure()
@@ -1533,6 +1584,7 @@ jobs:
 
   charm-upgrade-test:
     needs:
+      - preflight
       - lint
       - unit-test
       - build

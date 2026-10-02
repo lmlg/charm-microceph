@@ -991,44 +991,33 @@ class TestCharm(testbase.TestBaseCharm):
         }
         self._test_list_disks_action(microceph_cmd_output, expected_disks)
 
-    @patch("requests.get")
-    def test_get_snap_info(self, mock_get):
-        # Sample mocked response data
+    @patch("microceph.snap.SnapClient")
+    def test_get_snap_info(self, mock_snap_client):
+        # snapd's find endpoint (queried over the Unix socket) honours the
+        # snap store proxy, unlike a direct call to api.snapcraft.io.
         mock_response_data = {
             "name": "test-snap",
             "summary": "A test snap",
             # ... add more fields as needed
         }
-        mock_response = MagicMock()
-        # mock_response.raise_for_status.return_value = None  # Avoid raising exceptions
-        mock_response.json.return_value = mock_response_data
-        mock_get.return_value = mock_response
+        client = mock_snap_client.return_value
+        client.get_snap_information.return_value = mock_response_data
 
         result = microceph.get_snap_info("test-snap")
 
         self.assertEqual(result, mock_response_data)
-        mock_get.assert_called_once_with(
-            "https://api.snapcraft.io/v2/snaps/info/test-snap",
-            headers={"Snap-Device-Series": "16"},
-        )
+        client.get_snap_information.assert_called_once_with("test-snap")
 
     @patch("microceph.get_snap_info")
     def test_get_snap_tracks(self, mock_get_snap_info):
-        # Simulate get_snap_info output
-        mock_snap_info = {
-            "channel-map": [
-                {"channel": {"track": "quincy/stable"}},
-                {"channel": {"track": "reef/beta"}},
-                {"channel": {"track": "quincy/stable"}},
-            ]
-        }
-        mock_get_snap_info.return_value = mock_snap_info
+        # snapd's find endpoint returns the list of tracks directly.
+        mock_get_snap_info.return_value = {"tracks": ["quincy", "reef", "quincy"]}
 
         # Execute the code under test
         result = microceph.get_snap_tracks("test-snap")
 
         # Expected Assertion
-        self.assertEqual(sorted(result), ["quincy/stable", "reef/beta"])
+        self.assertEqual(sorted(result), ["quincy", "reef"])
 
     @patch("microceph.get_snap_tracks")
     def test_can_upgrade_snap_empty_new_version(self, mock_get_snap_tracks):
@@ -1048,7 +1037,12 @@ class TestCharm(testbase.TestBaseCharm):
         self, mock_get_snap_tracks, mock_get_snap_info
     ):
         mock_get_snap_tracks.return_value = {"squid", "tentacle"}
-        mock_get_snap_info.return_value = {"latest": "20"}
+        # snapd reports a per-channel version in its `channels` map; resolving
+        # 'latest' uses the latest/stable channel version.
+        mock_get_snap_info.return_value = {
+            "channels": {"latest/stable": {"version": "20.2.1+snapb8f87722ee"}},
+            "version": "20.2.1+snapb8f87722ee",
+        }
 
         result = microceph.can_upgrade_snap("latest", "tentacle")
 
@@ -2590,3 +2584,48 @@ class TestPlacementReconciliation(testbase.TestBaseCharm):
             MagicMock(relation=self.harness.model.get_relation("role-assignment", rel_id))
         )
         self.assertTrue(listener.emitted_revoked)
+
+class TestConfigLeaderCephPoolPgs(testbase.TestBaseCharm):
+    """Tests for the leader's pool replication/PGs config handler."""
+
+    # No module-level patches: the tests raise real CalledProcessErrors that
+    # the handler must catch, so the subprocess module must stay real.
+    PATCHES = []
+
+    def setUp(self):
+        """Setup MicroCeph Charm tests."""
+        super().setUp(charm, self.PATCHES)
+        self.init_harness()
+
+    def set_config(self, config: dict) -> None:
+        """Update config without running the config-changed hook."""
+        self.harness.disable_hooks()
+        self.harness.update_config(config)
+        self.harness.enable_hooks()
+
+    @patch.object(charm.MicroCephCharm, "ready_for_service")
+    @patch("ceph.ceph_config_set")
+    @patch.object(microceph, "set_pool_size")
+    def test_pool_pgs_transient_failure_defers_and_waits(
+        self, set_pool_size, ceph_config_set, ready
+    ):
+        """A transient set-rf failure (daemon restarting mid-upgrade) is retried.
+
+        Re-raising it left the leader permanently blocked: no later event
+        re-ran the idempotent command, so the upgrade never completed.
+        """
+        ready.return_value = True
+        self.harness.set_leader()
+        self.set_config({"default-pool-size": 3})
+        set_pool_size.side_effect = CalledProcessError(
+            1, ["sudo", "microceph", "pool", "set-rf", "--size", "3", ""], stderr="Error: EOF"
+        )
+
+        event = MagicMock()
+        with self.assertRaises(sunbeam_guard.WaitingExceptionError):
+            self.harness.charm.handle_config_leader_ceph_pool_pgs(event)
+
+        event.defer.assert_called_once()
+        # Nothing after the failed command ran; the retry redoes the lot.
+        ceph_config_set.assert_not_called()
+>>>>>>> canonical/main
