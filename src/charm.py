@@ -967,7 +967,12 @@ class MicroCephCharm(sunbeam_charm.OSBaseOperatorCharm):
             logger.warning(
                 "role-assignment relation is gone; standing down placement to secure lockdown"
             )
-            self._apply_placement_policy({"mode": "reconcile", "members": {}}, event, False)
+            try:
+                self._apply_placement_policy({"mode": "reconcile", "members": {}}, event, False)
+            except Exception:
+                raise sunbeam_guard.BlockedExceptionError(
+                    "Failed to set placement policy; manual override needed"
+                )
             return
 
         logger.info("Reconciling role-managed placement policy")
