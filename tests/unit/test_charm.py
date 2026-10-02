@@ -2628,4 +2628,3 @@ class TestConfigLeaderCephPoolPgs(testbase.TestBaseCharm):
         event.defer.assert_called_once()
         # Nothing after the failed command ran; the retry redoes the lot.
         ceph_config_set.assert_not_called()
->>>>>>> canonical/main
