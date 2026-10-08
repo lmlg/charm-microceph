@@ -2585,6 +2585,7 @@ class TestPlacementReconciliation(testbase.TestBaseCharm):
         )
         self.assertTrue(listener.emitted_revoked)
 
+
 class TestConfigLeaderCephPoolPgs(testbase.TestBaseCharm):
     """Tests for the leader's pool replication/PGs config handler."""
 
